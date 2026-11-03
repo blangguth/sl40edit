@@ -123,7 +123,7 @@ different file some of them will fail.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-only (GNU General Public License, version 3). See [LICENSE](LICENSE).
 
 This project is not affiliated with or endorsed by Comag. "Comag" and
 "SL40HD" are used only to identify the supported device.

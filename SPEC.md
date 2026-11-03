@@ -188,5 +188,5 @@ probably the last-watched channel).
 
 ## License
 
-GPL-3.0-or-later. The format knowledge comes from ChanSort (GPLv3, ©
+GPL-3.0-only, the same version as ChanSort. The format knowledge comes from ChanSort (GPLv3, ©
 PredatH0r).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! Tests against a pristine copy of a real receiver backup in `testdata/`
 //! (read-only, gitignored because it's a personal channel list). The tests skip
 //! if it's missing. Keep `samples/` for trying the editor; tests never use it.

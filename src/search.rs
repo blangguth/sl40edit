@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! Forgiving channel-name search.
 //!
 //! The query and the names are compared after normalising both: lowercase,

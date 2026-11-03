@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! Reader/writer for the Comag SL40HD `.DBM` channel database (948,368-byte variant).
 //!
 //! Layout from ChanSort (`ChanSort.Loader.DBM.ini`, `[dbm:948368]`, GPLv3), verified

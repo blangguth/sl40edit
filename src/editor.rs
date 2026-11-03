@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! Channel ordering with grab-and-move, move-to-position and undo/redo.
 //!
 //! The editor never touches the file. It only manipulates `order`, a list of

@@ -123,6 +123,8 @@ different file some of them will fail.
 
 ## License
 
+Copyright (C) 2026 Benjamin Langguth
+
 GPL-3.0-only (GNU General Public License, version 3). See [LICENSE](LICENSE).
 
 This project is not affiliated with or endorsed by Comag. "Comag" and

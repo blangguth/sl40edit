@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 mod app;
 
 use std::path::{Path, PathBuf};

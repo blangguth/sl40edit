@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! DVB string decoding (EN 300 468, Annex A) — just enough for channel and satellite names.
 
 /// Decode a NUL-padded DVB text field for display.

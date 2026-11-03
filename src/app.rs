@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! Terminal UI: channel table, grab & move, move to number, search, undo/redo, save.
 
 use std::path::{Path, PathBuf};

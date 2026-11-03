@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Benjamin Langguth
+
 //! End-to-end tests of the command-line binary.
 
 use std::os::unix::fs::PermissionsExt;

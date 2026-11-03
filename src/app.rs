@@ -1,9 +1,8 @@
-//! Terminal UI: channel table, grab & move, move to number, search, undo/redo.
-//! Saving from the UI comes in milestone 4 (see SPEC.md).
+//! Terminal UI: channel table, grab & move, move to number, search, undo/redo, save.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -39,6 +38,11 @@ pub struct App {
     query: Option<Query>,
     /// One-shot status message, cleared on the next key press.
     message: Option<String>,
+    /// One-shot error message (shown in red), cleared on the next key press.
+    error: Option<String>,
+    /// The file contents we last loaded or wrote. Saving refuses to run if the
+    /// file on disk no longer matches, e.g. after a new receiver backup.
+    on_disk: Vec<u8>,
     /// Set after the first `q` with unsaved changes; a second `q` quits.
     quit_armed: bool,
     /// Rows visible in the table body, updated on each draw (used for paging).
@@ -55,6 +59,7 @@ impl App {
         }
         Self {
             path,
+            on_disk: file.raw().to_vec(),
             file,
             editor,
             table,
@@ -62,6 +67,7 @@ impl App {
             search: None,
             query: None,
             message: None,
+            error: None,
             quit_armed: false,
             page: 10,
             quit: false,
@@ -90,6 +96,7 @@ impl App {
 
     fn on_key(&mut self, key: KeyEvent) {
         self.message = None;
+        self.error = None;
         let quit_armed = std::mem::take(&mut self.quit_armed);
         let ctrl_c =
             key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
@@ -119,8 +126,45 @@ impl App {
             self.quit = true;
         } else {
             self.quit_armed = true;
-            self.message = Some("Unsaved changes will be lost. Press again to quit.".into());
+            self.message =
+                Some("Unsaved changes! w saves; press again to quit without saving.".into());
         }
+    }
+
+    /// `w`: write the current order back to the file (see `DbmFile::save`).
+    fn save(&mut self) {
+        if !self.editor.is_dirty() {
+            self.message = Some("No changes to save".into());
+            return;
+        }
+        match self.try_save() {
+            Ok(backup) => {
+                self.editor.mark_saved();
+                self.message = Some(match backup {
+                    Some(bak) => format!(
+                        "Saved {} channels · original kept as {}",
+                        self.editor.len(),
+                        file_name(&bak)
+                    ),
+                    None => format!("Saved {} channels", self.editor.len()),
+                });
+            }
+            Err(err) => self.error = Some(format!("Not saved: {err:#}")),
+        }
+    }
+
+    fn try_save(&mut self) -> Result<Option<PathBuf>> {
+        let current = std::fs::read(&self.path)
+            .with_context(|| format!("reading {}", self.path.display()))?;
+        ensure!(
+            current == self.on_disk,
+            "{} was changed by another program since it was loaded (restart sl40edit to load the new version)",
+            file_name(&self.path)
+        );
+        let backup = self.file.save(&self.path, self.editor.order())?;
+        self.on_disk = std::fs::read(&self.path)
+            .with_context(|| format!("re-reading {}", self.path.display()))?;
+        Ok(backup)
     }
 
     /// Cursor target for a navigation key, or `None` if `key` isn't one.
@@ -169,6 +213,7 @@ impl App {
             KeyCode::Char('n') => self.jump_to_match(true),
             KeyCode::Char('N') => self.jump_to_match(false),
             KeyCode::Esc => self.query = None,
+            KeyCode::Char('w') => self.save(),
             KeyCode::Char('u') => match self.editor.undo() {
                 Some(pos) => self.table.select(Some(pos)),
                 None => self.message = Some("Nothing to undo".into()),
@@ -457,7 +502,7 @@ impl App {
         } else {
             (
                 Span::raw(" NORMAL ").black().on_blue(),
-                "space grab · m move to · / search · u undo · ^r redo · q quit",
+                "space grab · m move to · / search · u undo · ^r redo · w save · q quit",
             )
         };
 
@@ -476,12 +521,20 @@ impl App {
         if !self.file.warnings.is_empty() {
             spans.push(Span::raw(format!("· {} warning(s) ", self.file.warnings.len())).yellow());
         }
-        match &self.message {
-            Some(msg) => spans.push(Span::raw(format!("· {msg}")).bold()),
-            None => spans.push(Span::raw(format!("· {hints}")).dim()),
+        match (&self.error, &self.message) {
+            (Some(err), _) => spans.push(Span::raw(format!("· {err}")).red().bold()),
+            (None, Some(msg)) => spans.push(Span::raw(format!("· {msg}")).bold()),
+            (None, None) => spans.push(Span::raw(format!("· {hints}")).dim()),
         }
         Line::from(spans)
     }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -724,5 +777,148 @@ mod search_tests {
         press(&mut app, " g ");
         assert_eq!(app.channel_name(0), "KiKA HD");
         assert_eq!(app.editor.undo_depth(), 1);
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::tests::{press, render};
+    use super::*;
+
+    /// A scratch copy of the sample in its own temp directory.
+    struct Scratch {
+        dir: PathBuf,
+        path: PathBuf,
+    }
+
+    impl Scratch {
+        fn new(name: &str) -> Option<Self> {
+            let sample =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/COMAG_SL40HD_03_11.DBM");
+            if !sample.exists() {
+                eprintln!("skipping: sample missing");
+                return None;
+            }
+            let dir =
+                std::env::temp_dir().join(format!("sl40edit-save-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("COMAG_SL40HD_03_11.DBM");
+            std::fs::copy(&sample, &path).unwrap();
+            Some(Self { dir, path })
+        }
+
+        fn app(&self) -> App {
+            App::new(self.path.clone(), DbmFile::load(&self.path).unwrap())
+        }
+
+        fn bak(&self) -> PathBuf {
+            self.dir.join("COMAG_SL40HD_03_11.DBM.bak")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn save_writes_new_order_and_backup() {
+        let Some(s) = Scratch::new("basic") else {
+            return;
+        };
+        let original = std::fs::read(&s.path).unwrap();
+        let mut app = s.app();
+
+        press(&mut app, "/kika\n g w");
+        let screen = render(&mut app);
+        assert!(screen.contains("Saved 378 channels"), "{screen}");
+        assert!(
+            screen.contains("original kept as COMAG_SL40HD_03_11.DBM.bak"),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("[+]") && !screen.contains("modified"),
+            "{screen}"
+        );
+        assert!(!app.editor.is_dirty());
+
+        let saved = DbmFile::load(&s.path).unwrap();
+        assert_eq!(saved.channels[saved.program_order()[0]].name, "KiKA HD");
+        assert_eq!(std::fs::read(s.bak()).unwrap(), original);
+
+        // Undo after saving makes it dirty again; a second save keeps the
+        // pristine backup and restores the original bytes exactly.
+        press(&mut app, "uw");
+        assert!(render(&mut app).contains("Saved 378 channels"));
+        assert_eq!(std::fs::read(&s.path).unwrap(), original);
+        assert_eq!(std::fs::read(s.bak()).unwrap(), original);
+
+        // Saved state means q quits without asking.
+        press(&mut app, "q");
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn nothing_to_save_writes_nothing() {
+        let Some(s) = Scratch::new("noop") else {
+            return;
+        };
+        let mut app = s.app();
+        press(&mut app, "w");
+        assert!(render(&mut app).contains("No changes to save"));
+        assert!(!s.bak().exists());
+    }
+
+    #[test]
+    fn refuses_when_file_changed_on_disk() {
+        let Some(s) = Scratch::new("changed") else {
+            return;
+        };
+        let mut app = s.app();
+        press(&mut app, "m3\n");
+
+        // Simulate a new receiver backup landing on the stick.
+        let mut other = std::fs::read(&s.path).unwrap();
+        other.swap(0x1f56e + 10, 0x1f56e + 11);
+        std::fs::write(&s.path, &other).unwrap();
+
+        press(&mut app, "w");
+        let screen = render(&mut app);
+        assert!(
+            screen.contains("Not saved") && screen.contains("changed by another program"),
+            "{screen}"
+        );
+        assert_eq!(std::fs::read(&s.path).unwrap(), other);
+        assert!(!s.bak().exists());
+        assert!(app.editor.is_dirty());
+    }
+
+    #[test]
+    fn reports_missing_file() {
+        let Some(s) = Scratch::new("missing") else {
+            return;
+        };
+        let mut app = s.app();
+        press(&mut app, "m3\n");
+        std::fs::remove_file(&s.path).unwrap();
+        press(&mut app, "w");
+        assert!(render(&mut app).contains("Not saved: reading"));
+        assert!(app.editor.is_dirty());
+    }
+
+    #[test]
+    fn quit_prompt_mentions_save() {
+        let Some(s) = Scratch::new("quitmsg") else {
+            return;
+        };
+        let mut app = s.app();
+        press(&mut app, "m3\nq");
+        assert!(render(&mut app).contains("w saves"));
+        press(&mut app, "w");
+        assert!(!app.quit);
+        press(&mut app, "q");
+        assert!(app.quit);
     }
 }

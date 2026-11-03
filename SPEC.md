@@ -136,6 +136,12 @@ probably the last-watched channel).
 - It writes `<file>.tmp`, fsyncs, renames the original to `<file>.bak` (only
   if no `.bak` exists yet, so the `.bak` always keeps the pristine original),
   then renames the tmp file into place.
+- Before writing, the app checks that the file on disk still matches what it
+  last loaded or saved. If something else changed it (e.g. a new *Backup to
+  USB* while the editor was open), nothing is written and the app shows an
+  error, so an old list can't overwrite a newer backup.
+- `w` without changes writes nothing. Errors appear in red in the status bar,
+  and the changes stay unsaved.
 
 ## Testing
 
@@ -168,9 +174,8 @@ probably the last-watched channel).
 2. **Read-only TUI** (done in the scaffold): table, navigation, status bar.
 3. **Editing** (done): grab and move, move to number, undo and redo
    (`src/editor.rs`). A whole grab counts as one undo step.
-4. Save from the UI (`w`) with backup and verification. The quit
-   confirmation is already in place: `q` or `ctrl-c` with unsaved changes
-   asks for a second press.
+4. **Save** (done): `w` writes in place. With unsaved changes, `q` or
+   `ctrl-c` asks for a second press and points to `w`.
 5. **Search** (done, `src/search.rs`), help overlay (`?`) still open.
 6. ~~First receiver test~~ done on 2026-11-03 (`sl40edit --test-swap FILE.DBM`
    swaps channels 1 and 2 in place; run it again to swap back).

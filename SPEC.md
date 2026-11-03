@@ -158,8 +158,11 @@ probably the last-watched channel).
 1. **Format core** (done in the scaffold): parse, serialize, checksum, reorder
    by program numbers, tests.
 2. **Read-only TUI** (done in the scaffold): table, navigation, status bar.
-3. Editing: grab and move, move to number, undo and redo.
-4. Save with backup and verification; quit confirmation.
+3. **Editing** (done): grab and move, move to number, undo and redo
+   (`src/editor.rs`). A whole grab counts as one undo step.
+4. Save from the UI (`w`) with backup and verification. The quit
+   confirmation is already in place: `q` or `ctrl-c` with unsaved changes
+   asks for a second press.
 5. Search and help overlay.
 6. ~~First receiver test~~ done on 2026-11-03 (`sl40edit --test-swap FILE.DBM`
    swaps channels 1 and 2 in place; run it again to swap back).

@@ -1,0 +1,5 @@
+/target
+# Personal channel lists and editor side files
+/samples/*.DBM
+*.DBM.bak
+*.DBM.tmp

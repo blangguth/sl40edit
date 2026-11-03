@@ -1,0 +1,10 @@
+[package]
+name = "sl40edit"
+version = "0.1.0"
+edition = "2024"
+description = "Terminal channel list editor for the Comag SL40HD satellite receiver"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1.0.104"
+ratatui = "0.30.2"

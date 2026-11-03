@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "Terminal channel list editor for the Comag SL40HD satellite receiver"
 license = "GPL-3.0-or-later"
+rust-version = "1.88"
+repository = "https://github.com/blangguth/sl40edit"
+readme = "README.md"
+keywords = ["comag", "satellite", "channel-list", "dvb", "tui"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.104"

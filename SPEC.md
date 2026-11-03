@@ -15,9 +15,9 @@ It was checked against a real backup, `samples/COMAG_SL40HD_03_11.DBM`.
 ## Workflow
 
 1. Receiver: *DB management → Backup to USB* writes `COMAG_SL40HD_<dd>_<mm>.DBM`.
-2. `sl40edit /media/usb/COMAG_SL40HD_03_11.DBM`, then reorder and save.
-3. Receiver: *DB management → Load from USB*. The forum reports say the
-   receiver looks for a specific filename; check this during the first test.
+2. `sl40edit /media/sdc1/COMAG_SL40HD_03_11.DBM`, then reorder and save.
+3. Receiver: *DB management → Load from USB*. It accepts the dated filename
+   as written (confirmed 2026-11-03), so there's no need to rename.
 
 ## Scope
 
@@ -119,8 +119,9 @@ probably the last-watched channel).
 - Reordering rewrites **only** the u16 at channel offset 64. All other bytes
   are copied through unchanged.
 - ChanSort marks some other DBM variants with `reorderPhysically=true`, which
-  writes records in the new order. This variant isn't marked, so v1 only
-  renumbers. **Open question for the first receiver test.**
+  writes records in the new order. This variant isn't marked, and renumbering
+  alone is enough: **confirmed on the receiver on 2026-11-03** (see the open
+  questions below).
 - Before writing, the app checks that the program numbers are a permutation of
   `0..n-1`, recalculates the checksum, then parses the new image again and
   compares the result.
@@ -142,11 +143,15 @@ probably the last-watched channel).
 
 ## Open questions (receiver tests)
 
-1. Does renumbering alone change the order on the receiver, or do the records
-   have to be physically reordered?
-2. What does bit `0x20` of flag byte 81 mean (Das Erste HD)?
-3. Which filename does *Load from USB* expect: `COMAG_SL40HD.DBM` or the
-   dated name?
+1. ~~Does renumbering alone change the order on the receiver, or do the
+   records have to be physically reordered?~~ **Answered on 2026-11-03:**
+   renumbering is enough. After `--test-swap`, *Load from USB* accepted the
+   file, which also confirms the checksum, and channel 1 became AnixeHD Serie.
+   No physical reordering is needed.
+2. What does bit `0x20` of flag byte 81 mean (Das Erste HD)? It moved with
+   the record during the swap test and caused no visible problems.
+3. ~~Which filename does *Load from USB* expect?~~ **Answered on 2026-11-03:**
+   it accepts the dated name `COMAG_SL40HD_03_11.DBM` unchanged.
 
 ## Milestones
 
@@ -156,7 +161,8 @@ probably the last-watched channel).
 3. Editing: grab and move, move to number, undo and redo.
 4. Save with backup and verification; quit confirmation.
 5. Search and help overlay.
-6. First receiver test, then settle the open questions.
+6. ~~First receiver test~~ done on 2026-11-03 (`sl40edit --test-swap FILE.DBM`
+   swaps channels 1 and 2 in place; run it again to swap back).
 
 ## License
 

@@ -29,7 +29,15 @@ It was checked against a real backup, `samples/COMAG_SL40HD_03_11.DBM`.
     and `esc` cancels the move.
   - **Move to number:** `m`, type a number, `enter`. The channel moves to that
     position and the others shift.
-- `/` incremental search by name; `n`/`N` next or previous match.
+- `/` incremental search by name. While you type, the cursor jumps to the
+  first match at or after where the search started. `↓`/`↑` (or
+  `tab`/`shift-tab`) step through the matches, `enter` confirms, and `esc`
+  returns to the starting point. After confirming, `n`/`N` go to the next or
+  previous match with wrap-around, matching names are highlighted, and the
+  status bar shows `/query 2/7`. `esc` in normal mode clears the search.
+  Matching ignores case, diacritics and punctuation: `sat1` finds
+  "SAT.1 Gold", `zdfneo` finds "zdf_neo HD", `osterreich` finds
+  "Österreich".
 - Undo and redo (`u` / `ctrl-r`) across the whole session.
 - Save in place (`w`), keeping a `.bak` copy of the original. Quit with `q`,
   which asks for confirmation when there are unsaved changes.
@@ -163,7 +171,7 @@ probably the last-watched channel).
 4. Save from the UI (`w`) with backup and verification. The quit
    confirmation is already in place: `q` or `ctrl-c` with unsaved changes
    asks for a second press.
-5. Search and help overlay.
+5. **Search** (done, `src/search.rs`), help overlay (`?`) still open.
 6. ~~First receiver test~~ done on 2026-11-03 (`sl40edit --test-swap FILE.DBM`
    swaps channels 1 and 2 in place; run it again to swap back).
 

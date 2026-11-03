@@ -3,3 +3,4 @@
 /samples/*.DBM
 *.DBM.bak
 *.DBM.tmp
+/testdata/*.DBM

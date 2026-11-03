@@ -6,10 +6,10 @@ use anyhow::{Context, Result, ensure};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, HighlightSpacing, Row, Table, TableState};
+use ratatui::widgets::{Block, Cell, Clear, HighlightSpacing, Row, Table, TableState};
 
 use sl40edit::dbm::DbmFile;
 use sl40edit::editor::Editor;
@@ -21,9 +21,39 @@ const MAX_PROMPT_DIGITS: usize = 4;
 /// The search prompt while it's open.
 struct SearchInput {
     text: String,
-    /// Cursor position when the search started; `esc` returns here.
+    /// Cursor position (or grabbed channel position) when the search started;
+    /// `esc` returns here.
     origin: usize,
 }
+
+/// Help overlay contents: (keys, description). Empty keys start a section.
+const HELP: &[(&str, &str)] = &[
+    ("", "Navigation"),
+    ("j/k  ↓/↑", "line down/up"),
+    ("ctrl-d/ctrl-u", "half page down/up"),
+    ("PgDn/PgUp", "page down/up"),
+    ("g/G  Home/End", "top/bottom"),
+    ("", "Moving channels"),
+    ("space", "grab channel, then move it with the keys above"),
+    ("space/enter", "drop it"),
+    ("esc", "cancel the move (channel goes back)"),
+    (
+        "/  n/N",
+        "while moving: place it right after the next match",
+    ),
+    ("m", "move to number…"),
+    ("", "Search"),
+    ("/", "search by name (case, accents, punctuation ignored)"),
+    ("↓/↑  tab", "while typing: next/previous match"),
+    ("enter / esc", "keep result / go back to where you were"),
+    ("n/N", "next/previous match"),
+    ("esc", "clear search highlight"),
+    ("", "Editing & file"),
+    ("u  ctrl-r", "undo / redo"),
+    ("w", "save (the original is kept as .bak)"),
+    ("q  ctrl-c", "quit (asks again if unsaved)"),
+    ("?", "this help"),
+];
 
 pub struct App {
     path: PathBuf,
@@ -45,6 +75,8 @@ pub struct App {
     on_disk: Vec<u8>,
     /// Set after the first `q` with unsaved changes; a second `q` quits.
     quit_armed: bool,
+    /// Help overlay is shown; the next key closes it.
+    help: bool,
     /// Rows visible in the table body, updated on each draw (used for paging).
     page: usize,
     quit: bool,
@@ -69,6 +101,7 @@ impl App {
             message: None,
             error: None,
             quit_armed: false,
+            help: false,
             page: 10,
             quit: false,
         }
@@ -100,12 +133,15 @@ impl App {
         let quit_armed = std::mem::take(&mut self.quit_armed);
         let ctrl_c =
             key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        let typing = self.prompt.is_some() || self.search.is_some();
 
-        if ctrl_c
-            || (key.code == KeyCode::Char('q')
-                && self.prompt.is_none()
-                && self.search.is_none()
-                && self.editor.grabbed().is_none())
+        if self.help && !ctrl_c {
+            // Any key closes the help without doing anything else.
+            self.help = false;
+        } else if key.code == KeyCode::Char('?') && !typing {
+            self.help = true;
+        } else if ctrl_c
+            || (key.code == KeyCode::Char('q') && !typing && self.editor.grabbed().is_none())
         {
             self.request_quit(quit_armed);
         } else if self.search.is_some() {
@@ -222,11 +258,69 @@ impl App {
         }
     }
 
+    // Searching works on a "search space": normally all channels, and while moving
+    // all channels except the grabbed one. A hit `k` is an index into that space.
+
+    fn search_len(&self) -> usize {
+        match self.editor.grabbed() {
+            Some(_) => self.editor.len().saturating_sub(1),
+            None => self.editor.len(),
+        }
+    }
+
+    fn search_name(&self, k: usize) -> &str {
+        match self.editor.grabbed() {
+            Some(g) if k >= g => self.channel_name(k + 1),
+            _ => self.channel_name(k),
+        }
+    }
+
     /// First match for `query` at or after (or before) `start`, with wrap-around.
     fn find(&self, query: &Query, start: usize, forward: bool) -> Option<Hit> {
-        search::find(self.editor.len(), start, forward, |pos| {
-            query.matches(self.channel_name(pos))
+        search::find(self.search_len(), start, forward, |k| {
+            query.matches(self.search_name(k))
         })
+    }
+
+    /// Where "next"/"previous match" searching starts.
+    fn next_start(&self, forward: bool) -> usize {
+        let n = self.search_len();
+        if n == 0 {
+            return 0;
+        }
+        match self.editor.grabbed() {
+            // Normal: the line after/before the cursor.
+            None if forward => self.cursor() + 1,
+            None => self.cursor() + n - 1,
+            // Moving: the grabbed channel sits right after others[g - 1], so the
+            // next candidate is others[g] and the previous one is others[g - 2].
+            Some(g) if forward => g,
+            Some(g) if g >= 2 => g - 2,
+            Some(_) => n - 1,
+        }
+    }
+
+    /// Go to hit `k`: move the cursor there or, while moving, place the
+    /// grabbed channel directly after it.
+    fn go_to_hit(&mut self, k: usize) {
+        if self.editor.grabbed().is_some() {
+            if let Some(pos) = self.editor.move_grabbed(k + 1) {
+                self.table.select(Some(pos));
+            }
+        } else {
+            self.table.select(Some(k));
+        }
+    }
+
+    /// Return to where a search started (esc, or no match while typing).
+    fn back_to_origin(&mut self, origin: usize) {
+        if self.editor.grabbed().is_some() {
+            if let Some(pos) = self.editor.move_grabbed(origin) {
+                self.table.select(Some(pos));
+            }
+        } else {
+            self.table.select(Some(origin));
+        }
     }
 
     /// Positions of all matches, in list order.
@@ -250,24 +344,20 @@ impl App {
             self.message = Some("No search yet (press /)".into());
             return;
         };
-        let len = self.editor.len();
-        let start = if forward {
-            self.cursor() + 1
-        } else {
-            self.cursor() + len - 1
-        };
-        match self.find(&query, start, forward) {
+        match self.find(&query, self.next_start(forward), forward) {
             Some(hit) => {
-                self.table.select(Some(hit.pos));
-                if hit.wrapped {
-                    self.message = Some(
-                        if forward {
-                            "Search wrapped to the top"
-                        } else {
-                            "Search wrapped to the bottom"
-                        }
-                        .into(),
-                    );
+                self.go_to_hit(hit.pos);
+                let wrapped = match (hit.wrapped, forward) {
+                    (false, _) => "",
+                    (true, true) => "Search wrapped to the top",
+                    (true, false) => "Search wrapped to the bottom",
+                };
+                if self.editor.grabbed().is_some() {
+                    let after = self.search_name(hit.pos).to_owned();
+                    let sep = if wrapped.is_empty() { "" } else { " · " };
+                    self.message = Some(format!("Placed after '{after}'{sep}{wrapped}"));
+                } else if !wrapped.is_empty() {
+                    self.message = Some(wrapped.into());
                 }
             }
             None => self.message = Some(format!("No match for '{}'", query.as_str())),
@@ -283,14 +373,14 @@ impl App {
             KeyCode::Esc => {
                 let origin = input.origin;
                 self.search = None;
-                self.table.select(Some(origin));
+                self.back_to_origin(origin);
             }
             KeyCode::Enter => {
                 let Some(input) = self.search.take() else {
                     return;
                 };
                 if let Some(query) = Query::new(&input.text) {
-                    if !query.matches(self.channel_name(self.cursor())) {
+                    if self.find(&query, 0, true).is_none() {
                         self.message = Some(format!("No match for '{}'", query.as_str()));
                     }
                     self.query = Some(query);
@@ -311,12 +401,15 @@ impl App {
     }
 
     /// While typing: jump to the first match at or after where the search started.
+    /// While moving, `origin` in the search space is the channel that originally
+    /// followed the grabbed one, so this works the same in both modes.
     fn search_incremental(&mut self) {
         let Some(input) = &self.search else { return };
         let origin = input.origin;
-        let hit = Query::new(&input.text).and_then(|q| self.find(&q, origin, true));
-        self.table
-            .select(Some(hit.map_or(origin, |hit: Hit| hit.pos)));
+        match Query::new(&input.text).and_then(|q| self.find(&q, origin, true)) {
+            Some(hit) => self.go_to_hit(hit.pos),
+            None => self.back_to_origin(origin),
+        }
     }
 
     /// While typing: ↓/↑ move to the next or previous match.
@@ -324,14 +417,8 @@ impl App {
         let Some(query) = self.search.as_ref().and_then(|s| Query::new(&s.text)) else {
             return;
         };
-        let len = self.editor.len();
-        let start = if forward {
-            self.cursor() + 1
-        } else {
-            self.cursor() + len - 1
-        };
-        if let Some(hit) = self.find(&query, start, forward) {
-            self.table.select(Some(hit.pos));
+        if let Some(hit) = self.find(&query, self.next_start(forward), forward) {
+            self.go_to_hit(hit.pos);
         }
     }
 
@@ -353,7 +440,15 @@ impl App {
                     self.table.select(Some(pos));
                 }
             }
-            _ => self.message = Some("Moving: space/enter drops, esc cancels".into()),
+            KeyCode::Char('/') => {
+                self.search = Some(SearchInput {
+                    text: String::new(),
+                    origin: self.cursor(),
+                });
+            }
+            KeyCode::Char('n') => self.jump_to_match(true),
+            KeyCode::Char('N') => self.jump_to_match(false),
+            _ => self.message = Some("Moving: space/enter drops, esc cancels, ? help".into()),
         }
     }
 
@@ -460,6 +555,10 @@ impl App {
         self.page = main.height.saturating_sub(3) as usize;
         frame.render_stateful_widget(table, main, &mut self.table);
         frame.render_widget(self.status_line(), status);
+
+        if self.help {
+            draw_help(frame, frame.area());
+        }
     }
 
     fn status_line(&self) -> Line<'_> {
@@ -479,8 +578,12 @@ impl App {
         }
 
         if let Some(input) = &self.search {
+            let badge = match self.editor.grabbed() {
+                Some(_) => Span::raw(" MOVE + SEARCH ").black().on_yellow(),
+                None => Span::raw(" SEARCH ").black().on_magenta(),
+            };
             let mut spans = vec![
-                Span::raw(" SEARCH ").black().on_magenta(),
+                badge,
                 Span::raw(" /"),
                 Span::raw(format!("{}▏", input.text)).bold(),
             ];
@@ -490,19 +593,25 @@ impl App {
                     k => spans.push(Span::raw(format!("  {k} match(es)"))),
                 }
             }
-            spans.push(Span::raw("  · ↓/↑ next/prev · enter ok · esc cancel").dim());
+            if let Some(g) = self.editor.grabbed() {
+                spans.push(Span::raw(format!(
+                    "  '{}' goes after the match",
+                    self.channel_name(g)
+                )));
+            }
+            spans.push(Span::raw("  · ↓/↑ next/prev · enter ok · esc back").dim());
             return Line::from(spans);
         }
 
         let (badge, hints) = if self.editor.grabbed().is_some() {
             (
                 Span::raw(" MOVING ").black().on_yellow(),
-                "j/k PgUp/PgDn g/G move · space drop · esc cancel",
+                "j/k g/G move · / n N after match · space drop · esc cancel · ? help",
             )
         } else {
             (
                 Span::raw(" NORMAL ").black().on_blue(),
-                "space grab · m move to · / search · u undo · ^r redo · w save · q quit",
+                "space grab · m move to · / search · u undo · w save · q quit · ? help",
             )
         };
 
@@ -530,6 +639,28 @@ impl App {
     }
 }
 
+fn draw_help(frame: &mut Frame, area: Rect) {
+    let rows = HELP.iter().map(|&(keys, text)| {
+        if keys.is_empty() {
+            Row::new([Cell::from(""), Cell::from(text).bold().underlined()])
+        } else {
+            Row::new([Cell::from(keys).cyan(), Cell::from(text)])
+        }
+    });
+    let width = 72.min(area.width);
+    let height = (HELP.len() as u16 + 2).min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    let table = Table::new(rows, [Constraint::Length(16), Constraint::Fill(1)])
+        .block(Block::bordered().title(" Keys · any key closes "));
+    frame.render_widget(Clear, popup);
+    frame.render_widget(table, popup);
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(
         || path.display().to_string(),
@@ -544,7 +675,8 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     pub(super) fn app() -> Option<App> {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/COMAG_SL40HD_03_11.DBM");
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/COMAG_SL40HD_03_11.DBM");
         if !path.exists() {
             eprintln!("skipping: sample missing");
             return None;
@@ -784,6 +916,7 @@ mod search_tests {
 mod save_tests {
     use super::tests::{press, render};
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     /// A scratch copy of the sample in its own temp directory.
     struct Scratch {
@@ -794,7 +927,7 @@ mod save_tests {
     impl Scratch {
         fn new(name: &str) -> Option<Self> {
             let sample =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/COMAG_SL40HD_03_11.DBM");
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/COMAG_SL40HD_03_11.DBM");
             if !sample.exists() {
                 eprintln!("skipping: sample missing");
                 return None;
@@ -805,6 +938,8 @@ mod save_tests {
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("COMAG_SL40HD_03_11.DBM");
             std::fs::copy(&sample, &path).unwrap();
+            // The fixture is read-only; the scratch copy must be writable.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
             Some(Self { dir, path })
         }
 
@@ -920,5 +1055,110 @@ mod save_tests {
         assert!(!app.quit);
         press(&mut app, "q");
         assert!(app.quit);
+    }
+}
+
+#[cfg(test)]
+mod help_and_grab_search_tests {
+    use super::tests::{app, press, render};
+    use super::*;
+
+    fn pos_of(app: &App, name: &str) -> usize {
+        (0..app.editor.len())
+            .find(|&p| app.channel_name(p) == name)
+            .unwrap_or_else(|| panic!("{name} not in sample"))
+    }
+
+    #[test]
+    fn help_opens_and_any_key_closes_without_acting() {
+        let Some(mut app) = app() else { return };
+        press(&mut app, "?");
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 30)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        let screen: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(screen.contains("Keys · any key closes"));
+        assert!(screen.contains("place it right after the next match"));
+
+        press(&mut app, "j");
+        assert!(!app.help);
+        assert_eq!(app.cursor(), 0, "closing key must not move the cursor");
+        assert!(!render(&mut app).contains("any key closes"));
+    }
+
+    #[test]
+    fn question_mark_is_text_in_search_and_works_while_moving() {
+        let Some(mut app) = app() else { return };
+        press(&mut app, "/a?");
+        assert!(!app.help);
+        assert_eq!(app.search.as_ref().unwrap().text, "a?");
+        press(&mut app, "\x1b ?");
+        assert!(app.help && app.editor.grabbed().is_some());
+        press(&mut app, "x");
+        assert!(!app.help && app.editor.grabbed().is_some());
+    }
+
+    #[test]
+    fn search_while_moving_places_after_match() {
+        let Some(mut app) = app() else { return };
+        // Grab ZDF HD and put it right after Das Erste HD.
+        press(&mut app, "/zdf hd\n ");
+        assert_eq!(app.channel_name(app.cursor()), "ZDF HD");
+        press(&mut app, "/das erste");
+        assert!(render(&mut app).contains("MOVE + SEARCH"));
+        assert_eq!(app.channel_name(app.cursor()), "ZDF HD");
+        assert_eq!(app.cursor(), pos_of(&app, "Das Erste HD") + 1);
+        press(&mut app, "\n ");
+        assert!(app.editor.grabbed().is_none());
+        assert_eq!(names_from(&app, 0, 2), ["Das Erste HD", "ZDF HD"]);
+        assert_eq!(app.editor.undo_depth(), 1);
+    }
+
+    #[test]
+    fn esc_in_move_search_returns_channel_but_keeps_grab() {
+        let Some(mut app) = app() else { return };
+        press(&mut app, "jjj ");
+        let grabbed = app.channel_name(3).to_owned();
+        press(&mut app, "/kika");
+        assert_ne!(app.cursor(), 3);
+        press(&mut app, "\x1b");
+        assert_eq!(app.cursor(), 3);
+        assert_eq!(app.channel_name(3), grabbed);
+        assert!(app.editor.grabbed().is_some());
+        press(&mut app, "\x1b");
+        assert!(!app.editor.is_dirty());
+    }
+
+    #[test]
+    fn n_while_moving_hops_after_each_match() {
+        let Some(mut app) = app() else { return };
+        press(&mut app, "/zdf\n"); // confirm query, cursor on first ZDF channel
+        press(&mut app, "G "); // grab the last channel
+        let grabbed = app.channel_name(app.cursor()).to_owned();
+
+        press(&mut app, "n");
+        let after1 = app.channel_name(app.cursor() - 1).to_owned();
+        assert!(Query::new("zdf").unwrap().matches(&after1), "{after1}");
+        assert!(render(&mut app).contains(&format!("Placed after '{after1}'")));
+
+        press(&mut app, "n");
+        let after2 = app.channel_name(app.cursor() - 1).to_owned();
+        assert!(Query::new("zdf").unwrap().matches(&after2));
+        assert_ne!(after1, after2);
+
+        press(&mut app, "N");
+        assert_eq!(app.channel_name(app.cursor() - 1), after1);
+        assert_eq!(app.channel_name(app.cursor()), grabbed);
+    }
+
+    fn names_from(app: &App, from: usize, n: usize) -> Vec<String> {
+        (from..from + n)
+            .map(|p| app.channel_name(p).to_owned())
+            .collect()
     }
 }

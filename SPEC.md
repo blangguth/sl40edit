@@ -58,11 +58,11 @@ re-engineering.
 | `space` | grab | drop |
 | `esc` | clear search | cancel (put the channel back) |
 | `m` | move to number… | — |
-| `/`, `n`, `N` | search, next, previous | — |
+| `/`, `n`, `N` | search, next, previous | place the channel right after the next/previous match |
 | `u`, `ctrl-r` | undo, redo | — |
 | `w` | save | — |
 | `q` | quit | — |
-| `?` | help | help |
+| `?` | help overlay (any key closes it) | help overlay |
 
 ## File format (948,368-byte variant)
 
@@ -152,8 +152,11 @@ probably the last-watched channel).
   sample".
 - **Reorder:** after a move, the program numbers are still a permutation and
   only the bytes at channel offsets 64–65 (and the checksum) differ.
-- The sample is gitignored (it's a personal channel list). Tests that need it
-  skip with a message when it is missing.
+- Tests use a pristine, read-only copy in `testdata/COMAG_SL40HD_03_11.DBM`
+  (sha256 `a841ab4b…`), never the file in `samples/`, which is for trying the
+  editor and may get saved. `fixture_is_pristine` fails clearly if the copy
+  changes. Both directories are gitignored (personal channel list). Tests that
+  need the fixture skip with a message when it is missing.
 
 ## Open questions (receiver tests)
 
@@ -176,7 +179,10 @@ probably the last-watched channel).
    (`src/editor.rs`). A whole grab counts as one undo step.
 4. **Save** (done): `w` writes in place. With unsaved changes, `q` or
    `ctrl-c` asks for a second press and points to `w`.
-5. **Search** (done, `src/search.rs`), help overlay (`?`) still open.
+5. **Search and help** (done): `src/search.rs`, the `?` overlay, and search
+   while moving. With a channel grabbed, `/` or `n`/`N` place it right after
+   the matching channel (the grabbed channel itself is skipped), so you can
+   build the list top-down, e.g. grab ZDF HD, `/das erste`, `enter`, `space`.
 6. ~~First receiver test~~ done on 2026-11-03 (`sl40edit --test-swap FILE.DBM`
    swaps channels 1 and 2 in place; run it again to swap back).
 

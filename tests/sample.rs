@@ -1,5 +1,6 @@
-//! Tests against the real receiver backup in `samples/`. The sample is gitignored
-//! (personal channel list), so the tests skip if it's missing.
+//! Tests against a pristine copy of a real receiver backup in `testdata/`
+//! (read-only, gitignored because it's a personal channel list). The tests skip
+//! if it's missing. Keep `samples/` for trying the editor; tests never use it.
 
 use std::path::PathBuf;
 
@@ -8,7 +9,7 @@ use sl40edit::dbm::{
 };
 
 fn sample() -> Option<DbmFile> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/COMAG_SL40HD_03_11.DBM");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/COMAG_SL40HD_03_11.DBM");
     if !path.exists() {
         eprintln!("skipping: {} not found", path.display());
         return None;
@@ -149,4 +150,17 @@ fn save_writes_backup_once_and_verifies() {
         f.channels[order[0]].name
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn fixture_is_pristine() {
+    let Some(f) = sample() else { return };
+    let order = f.program_order();
+    assert!(
+        stored_checksum(f.raw()) == 0x3f49
+            && f.channels[order[0]].name == "Das Erste HD"
+            && f.channels[order[1]].name == "AnixeHD Serie",
+        "testdata/COMAG_SL40HD_03_11.DBM was modified; restore it from the original \
+         receiver backup (sha256 a841ab4b…)"
+    );
 }
